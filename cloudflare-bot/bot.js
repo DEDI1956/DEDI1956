@@ -1,73 +1,63 @@
+require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const logger = require('./logger');
-let db;
+const config = require('./config/config');
+const logger = require('./services/logger');
+const db = require('./services/database');
+const { handleStart, handleAgree, handleToken, handleAccountId, handleZoneId, showMainMenu } = require('./controllers/auth');
+const { handleDeploy, handleWorkerName, handleRepoUrl } = require('./controllers/deploy');
+const { handleListWorkers, handleDeleteWorker, handleConfirmDelete } = require('./controllers/list');
 
-try {
-  db = require('./database');
-} catch (err) {
-  logger.error('Failed to load database module.', err);
-  // Bot can still run, but database functionality will be disabled.
-}
+const bot = new TelegramBot(config.telegramToken, { polling: true });
 
-// Replace with your bot token
-const token = process.env.TELEGRAM_BOT_TOKEN || '8023549977:AAHCbO2zTJGoLaFkRMAaNq2PRS_Fgp8jEUs';
+bot.onText(/\/start/, (msg) => handleStart(bot, msg));
 
-const bot = new TelegramBot(token, {
-  polling: {
-    interval: 300,
-    autoStart: true,
-    params: {
-      timeout: 10
-    }
-  }
-});
+bot.on('callback_query', (query) => {
+  const { data, message } = query;
+  const chatId = message.chat.id;
 
-bot.on('polling_error', (error) => {
-  logger.error(`Polling error: ${error.code} - ${error.message}`);
-});
-
-bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
-  if (db) {
-    const query = 'INSERT OR IGNORE INTO users (telegram_id, state) VALUES (?, ?)';
-    db.run(query, [chatId, 'awaiting_agreement'], (err) => {
-      if (err) {
-        logger.error('Database error on /start', err);
-        bot.sendMessage(chatId, 'Sorry, there was a database error.');
-        return;
-      }
-      bot.sendMessage(chatId, 'Welcome! Please agree to the terms.');
+  if (data === 'agree') {
+    handleAgree(bot, message);
+  } else if (data === 'deploy') {
+    handleDeploy(bot, message);
+  } else if (data === 'list_workers') {
+    handleListWorkers(bot, message);
+  } else if (data.startsWith('delete_')) {
+    const workerName = data.split('_')[1];
+    handleDeleteWorker(bot, message, workerName);
+  } else if (data.startsWith('confirm_delete_')) {
+    const workerName = data.split('_')[2];
+    handleConfirmDelete(bot, message, workerName);
+  } else if (data === 'cancel_delete') {
+    bot.editMessageText('Penghapusan dibatalkan.', {
+      chat_id: chatId,
+      message_id: message.message_id,
     });
-  } else {
-    bot.sendMessage(chatId, 'Welcome! Database is currently unavailable.');
   }
 });
-
 
 bot.on('message', (msg) => {
-  // This is a simple echo bot for demonstration
   const chatId = msg.chat.id;
-  if(msg.text.toLowerCase() !== '/start'){
-    bot.sendMessage(chatId, `Echo: ${msg.text}`);
-  }
-});
+  if (msg.text.startsWith('/')) return;
 
-logger.info('Bot server started...');
+  db.get('SELECT state FROM users WHERE telegram_id = ?', [chatId], (err, row) => {
+    if (err || !row) return;
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-  logger.info("Caught interrupt signal, shutting down gracefully.");
-  bot.stopPolling().then(() => {
-    if (db) {
-      db.close((err) => {
-        if (err) {
-          logger.error(err.message);
-        }
-        logger.info('Database connection closed.');
-        process.exit(0);
-      });
-    } else {
-      process.exit(0);
+    const state = row.state;
+    if (state === 'awaiting_token') {
+      handleToken(bot, msg);
+    } else if (state === 'awaiting_account_id') {
+      handleAccountId(bot, msg);
+    } else if (state === 'awaiting_zone_id') {
+      handleZoneId(bot, msg);
+    } else if (state === 'awaiting_worker_name') {
+      handleWorkerName(bot, msg);
+    } else if (state.startsWith('awaiting_repo_url_')) {
+      const workerName = state.split('_')[3];
+      handleRepoUrl(bot, msg, workerName);
     }
   });
 });
+
+bot.on('polling_error', (error) => logger.error(error));
+
+logger.info('Bot started...');
