@@ -10,7 +10,7 @@ try {
 }
 
 // Replace with your bot token
-const token = process.env.TELEGRAM_BOT_TOKEN || 'YOUR_TELEGRAM_BOT_TOKEN';
+const token = process.env.TELEGRAM_BOT_TOKEN || '8023549977:AAHCbO2zTJGoLaFkRMAaNq2PRS_Fgp8jEUs';
 
 const bot = new TelegramBot(token, {
   polling: {
