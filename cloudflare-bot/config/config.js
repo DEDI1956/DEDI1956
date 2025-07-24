@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 module.exports = {
-  telegramToken: 'YOUR_TELEGRAM_BOT_TOKEN',
+  telegramToken: process.env.TELEGRAM_BOT_TOKEN,
 };
