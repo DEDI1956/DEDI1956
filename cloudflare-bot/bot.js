@@ -1,66 +1,73 @@
 const TelegramBot = require('node-telegram-bot-api');
-const config = require('./config/config');
-const { handleStart, handleMessage, showMainMenu } = require('./controllers/auth');
-const { handleDeployMessage } = require('./controllers/deploy');
-const { handleList, handleDelete } = require('./controllers/list');
-const db = require('./services/database');
-const logger = require('./services/logger');
+const logger = require('./logger');
+let db;
 
-const bot = new TelegramBot(config.telegramToken, { polling: true });
+try {
+  db = require('./database');
+} catch (err) {
+  logger.error('Failed to load database module.', err);
+  // Bot can still run, but database functionality will be disabled.
+}
 
-bot.onText(/\/start/, (msg) => {
-  db.run('INSERT OR IGNORE INTO users (telegram_id, state) VALUES (?, ?)', [msg.chat.id, 'awaiting_agreement'], (err) => {
-    if (err) {
-      logger.error(err.message);
+// Replace with your bot token
+const token = process.env.TELEGRAM_BOT_TOKEN || 'YOUR_TELEGRAM_BOT_TOKEN';
+
+const bot = new TelegramBot(token, {
+  polling: {
+    interval: 300,
+    autoStart: true,
+    params: {
+      timeout: 10
     }
-  });
-  handleStart(bot, msg);
-});
-
-bot.on('callback_query', (callbackQuery) => {
-  const msg = callbackQuery.message;
-  const data = callbackQuery.data;
-
-  if (data === 'agree') {
-    db.run('UPDATE users SET state = ? WHERE telegram_id = ?', ['awaiting_token'], (err) => {
-      if (err) {
-        logger.error(err.message);
-        return;
-      }
-      bot.sendMessage(msg.chat.id, 'Terima kasih. Silakan masukkan API Token Cloudflare Anda.');
-    });
-  } else if (data === 'deploy') {
-    db.run('UPDATE users SET state = ? WHERE telegram_id = ?', ['awaiting_worker_name'], (err) => {
-      if(err) {
-        logger.error(err.message);
-        return;
-      }
-      bot.sendMessage(msg.chat.id, 'Masukkan nama untuk Worker Anda:');
-    });
-  } else if (data === 'list') {
-    handleList(bot, msg.chat.id);
-  } else if (data.startsWith('delete_')) {
-    const workerName = data.split('_')[1];
-    handleDelete(bot, msg.chat.id, workerName);
   }
 });
 
-bot.on('message', (msg) => {
-  if (msg.text.startsWith('/')) return;
-  db.get('SELECT state FROM users WHERE telegram_id = ?', [msg.chat.id], (err, row) => {
-    if (err) {
-      logger.error(err.message);
-      return;
-    }
-    if (row) {
-      if (row.state.startsWith('awaiting_')) {
-        handleMessage(bot, msg);
-      } else if (row.state === 'authenticated') {
-        handleDeployMessage(bot, msg);
+bot.on('polling_error', (error) => {
+  logger.error(`Polling error: ${error.code} - ${error.message}`);
+});
+
+bot.onText(/\/start/, (msg) => {
+  const chatId = msg.chat.id;
+  if (db) {
+    const query = 'INSERT OR IGNORE INTO users (telegram_id, state) VALUES (?, ?)';
+    db.run(query, [chatId, 'awaiting_agreement'], (err) => {
+      if (err) {
+        logger.error('Database error on /start', err);
+        bot.sendMessage(chatId, 'Sorry, there was a database error.');
+        return;
       }
-    }
-  });
+      bot.sendMessage(chatId, 'Welcome! Please agree to the terms.');
+    });
+  } else {
+    bot.sendMessage(chatId, 'Welcome! Database is currently unavailable.');
+  }
+});
+
+
+bot.on('message', (msg) => {
+  // This is a simple echo bot for demonstration
+  const chatId = msg.chat.id;
+  if(msg.text.toLowerCase() !== '/start'){
+    bot.sendMessage(chatId, `Echo: ${msg.text}`);
+  }
 });
 
 logger.info('Bot server started...');
-console.log('Bot server started...');
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  logger.info("Caught interrupt signal, shutting down gracefully.");
+  bot.stopPolling().then(() => {
+    if (db) {
+      db.close((err) => {
+        if (err) {
+          logger.error(err.message);
+        }
+        logger.info('Database connection closed.');
+        process.exit(0);
+      });
+    } else {
+      process.exit(0);
+    }
+  });
+});
